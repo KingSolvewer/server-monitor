@@ -1,0 +1,1 @@
+简单基础的服务器监控系统，cpu，memory，swap，disk，system-load
