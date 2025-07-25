@@ -1,2 +1,4 @@
 server-monitor
 .env
+.DS_Store
+.idea
