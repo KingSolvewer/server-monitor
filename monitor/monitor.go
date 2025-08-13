@@ -48,6 +48,7 @@ type ServerMonitor struct {
 }
 
 var (
+	db     *gorm.DB
 	config Config
 	wg     sync.WaitGroup
 )
@@ -80,6 +81,13 @@ func SetConfig() {
 		config.DbPort = 3306
 	}
 	config.WebNode = viper.GetInt("WEB_NODE")
+
+	dsn := config.DbUsername + ":" + config.DbPassword + "@tcp(" + config.DbHost + ":" + strconv.Itoa(config.DbPort) + ")/" + config.DbName + "?charset=utf8mb4&parseTime=True&loc=Local"
+
+	db, err = gorm.Open(mysql.Open(dsn), &gorm.Config{NamingStrategy: schema.NamingStrategy{IdentifierMaxLength: 64, SingularTable: true}})
+	if err != nil {
+		panic("Gorm error: " + err.Error())
+	}
 }
 
 func calc(t time.Time) *ServerMonitor {
@@ -166,22 +174,8 @@ func calc(t time.Time) *ServerMonitor {
 }
 
 func save(monitor *ServerMonitor) (err error) {
-	dsn := config.DbUsername + ":" + config.DbPassword + "@tcp(" + config.DbHost + ":" + strconv.Itoa(config.DbPort) + ")/" + config.DbName + "?charset=utf8mb4&parseTime=True&loc=Local"
-
-	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{NamingStrategy: schema.NamingStrategy{IdentifierMaxLength: 64, SingularTable: true}})
-	if err != nil {
-		return errors.New("Gorm error: " + err.Error())
-	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		return errors.New("DB error: " + err.Error())
-	}
-	err = sqlDB.Ping()
-	if err != nil {
-		return errors.New("Connect DB error: " + err.Error())
-	}
 	ctx := context.Background()
-	err = gorm.G[ServerMonitor](db).Create(ctx, monitor)
+	err = gorm.G[ServerMonitor](db).Table("server_monitor").Create(ctx, monitor)
 	if err != nil {
 		return errors.New("Gorm Insert Sql error: " + err.Error())
 	}
@@ -192,33 +186,29 @@ func save(monitor *ServerMonitor) (err error) {
 func Start() {
 	// Step 1: 计算距离下一个整分钟的时间
 	now := time.Now()
+	fmt.Println("程序开始执行时间：", time.Now().Format(time.DateTime))
 	next := now.Truncate(time.Minute).Add(time.Minute)
 	time.Sleep(time.Until(next)) // 等待直到下一个00秒
 
-	fmt.Println("当前开始执行时间", time.Now().Format(time.DateTime))
-	fmt.Println("统计时间：", time.Now().Truncate(time.Minute).Format(time.DateTime))
+	fmt.Println("开始统计时间：", next.Format(time.DateTime))
 	run(now)
-	fmt.Println("当前结束执行时间", time.Now().Format(time.DateTime))
+	fmt.Println("统计结束时间：", time.Now().Format(time.DateTime))
 
-	ticker := time.NewTicker(time.Minute)
+	ticker := time.NewTicker(time.Minute + time.Second)
 	defer ticker.Stop() // 确保释放资源
 
-	for range ticker.C {
-		now = time.Now()
-		fmt.Println("当前开始执行时间", time.Now().Format(time.DateTime))
-		fmt.Println("统计时间：", now.Truncate(time.Minute).Format(time.DateTime))
+	for now = range ticker.C {
+		fmt.Println("统计开始时间：", now.Format(time.DateTime))
 		run(now)
-		fmt.Println("当前结束执行时间", time.Now().Format(time.DateTime))
+		fmt.Println("统计结束时间：", time.Now().Format(time.DateTime))
 	}
 }
 
 func run(t time.Time) {
-	calc(t)
+	serverMonitor := calc(t)
 
-	//serverMonitor := calc(t)
-	//
-	//err := save(serverMonitor)
-	//if err != nil {
-	//	fmt.Println(err)
-	//}
+	err := save(serverMonitor)
+	if err != nil {
+		fmt.Println(err)
+	}
 }
