@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/go-ping/ping"
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/shirou/gopsutil/v4/load"
@@ -43,6 +44,8 @@ type ServerMonitor struct {
 	DiskUsed     uint64    `gorm:"column:disk_used"`
 	SentSpeed    float64   `gorm:"column:sent_speed"`
 	ReceiveSpeed float64   `gorm:"column:receive_speed"`
+	AvgRtt       float64   `gorm:"column:avg_rtt"`
+	PacketLoss   float64   `gorm:"column:packet_loss"`
 	Node         int       `gorm:"column:node;primaryKey"`
 	CreatedAt    time.Time `gorm:"column:created_at;primaryKey"`
 }
@@ -51,6 +54,7 @@ var (
 	db     *gorm.DB
 	config Config
 	wg     sync.WaitGroup
+	pinger *ping.Pinger
 )
 
 func init() {
@@ -88,13 +92,18 @@ func SetConfig() {
 	if err != nil {
 		panic("Gorm error: " + err.Error())
 	}
+
+	pinger, err = ping.NewPinger("8.8.8.8") // Google DNS
+	if err != nil {
+		panic("Ping error: " + err.Error())
+	}
 }
 
 func calc(t time.Time) *ServerMonitor {
 
 	monitorTable := new(ServerMonitor)
 
-	wg.Add(6)
+	wg.Add(7)
 
 	//1. 压力（系统负载 / CPU 核数）= 1分钟平均负载 / CPU核数
 	go func() {
@@ -163,6 +172,37 @@ func calc(t time.Time) *ServerMonitor {
 		}
 		config.LastRecv = currentRecv
 		config.LastSent = currentSent
+	}()
+
+	go func() {
+		defer wg.Done()
+		pinger.Count = 5                 // 一次发送 5 个 ping
+		pinger.Interval = time.Second    // 每秒一个
+		pinger.Timeout = 6 * time.Second // 最长运行时间
+		pinger.SetPrivileged(true)       // 使用原始 socket（需要 root 权限）
+
+		// 可选：注册回调
+		pinger.OnRecv = func(pkt *ping.Packet) {
+			fmt.Printf("Reply from %s: time=%v\n", pkt.IPAddr, pkt.Rtt)
+		}
+		pinger.OnFinish = func(stats *ping.Statistics) {
+			//spew.Dump(stats)
+			//os.Exit(1)
+			fmt.Printf("\n--- %s ping statistics ---\n", stats.Addr)
+			fmt.Printf("Packets: Sent = %d, Received = %d, Lost = %d (%.1f%% loss)\n",
+				stats.PacketsSent, stats.PacketsRecv, stats.PacketsSent-stats.PacketsRecv, stats.PacketLoss)
+			fmt.Printf("RTT: min = %v, avg = %v, max = %v, stddev = %v\n",
+				stats.MinRtt, stats.AvgRtt, stats.MaxRtt, stats.StdDevRtt)
+
+			monitorTable.AvgRtt = util.ToDouble(float64(int(stats.AvgRtt)) / 1000000)
+			monitorTable.PacketLoss = util.ToDouble(stats.PacketLoss)
+		}
+
+		fmt.Println("PING 8.8.8.8:")
+		err := pinger.Run() // 阻塞执行
+		if err != nil {
+			fmt.Println(err)
+		}
 	}()
 
 	wg.Wait()
