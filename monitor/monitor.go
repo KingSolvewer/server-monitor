@@ -54,7 +54,6 @@ var (
 	db     *gorm.DB
 	config Config
 	wg     sync.WaitGroup
-	pinger *ping.Pinger
 )
 
 func init() {
@@ -91,11 +90,6 @@ func SetConfig() {
 	db, err = gorm.Open(mysql.Open(dsn), &gorm.Config{NamingStrategy: schema.NamingStrategy{IdentifierMaxLength: 64, SingularTable: true}})
 	if err != nil {
 		panic("Gorm error: " + err.Error())
-	}
-
-	pinger, err = ping.NewPinger("8.8.8.8") // Google DNS
-	if err != nil {
-		panic("Ping error: " + err.Error())
 	}
 }
 
@@ -176,6 +170,11 @@ func calc(t time.Time) *ServerMonitor {
 
 	go func() {
 		defer wg.Done()
+
+		pinger, err := ping.NewPinger("8.8.8.8") // Google DNS
+		if err != nil {
+			fmt.Println("ping时报错：", err)
+		}
 		pinger.Count = 5                 // 一次发送 5 个 ping
 		pinger.Interval = time.Second    // 每秒一个
 		pinger.Timeout = 6 * time.Second // 最长运行时间
@@ -199,9 +198,9 @@ func calc(t time.Time) *ServerMonitor {
 		}
 
 		fmt.Println("PING 8.8.8.8:")
-		err := pinger.Run() // 阻塞执行
+		err = pinger.Run() // 阻塞执行
 		if err != nil {
-			fmt.Println(err)
+			fmt.Println("ping时报错：", err)
 		}
 	}()
 
