@@ -51,12 +51,6 @@ func startMonitor() *cobra.Command {
 			monitor.Start()
 		},
 	}
-	//monitorCmd.Flags().StringVarP(&file, "file", "f", ".env", "The file to run the server-monitor")
-	//err := monitorCmd.MarkFlagRequired("file")
-	//if err != nil {
-	//	err = errors.New("缺少必要的文件名参数:" + err.Error())
-	//	panic(err)
-	//}
 
 	validateArgs(monitorCmd)
 
