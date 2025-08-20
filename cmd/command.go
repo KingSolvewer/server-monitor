@@ -1,10 +1,12 @@
 package cmd
 
 import (
-	"errors"
 	"fmt"
+	"github.com/solvewer/server-monitor/configuration"
 	"github.com/solvewer/server-monitor/monitor"
+	"github.com/solvewer/server-monitor/util"
 	"github.com/spf13/cobra"
+	"go.uber.org/zap"
 	"os"
 	"path/filepath"
 )
@@ -20,6 +22,15 @@ var (
 )
 
 func init() {
+	exePath, err := os.Executable()
+	if err != nil {
+		configuration.GetLogger(configuration.GlobalLogName).Error("程序执行目录错误", zap.Error(err))
+		panic(err)
+	}
+
+	dir := filepath.Dir(exePath)
+	configuration.GetLogger(configuration.GlobalLogName).Info("程序执行", zap.String("程序执行目录", dir))
+
 	monitorCmd := startMonitor()
 	mysqlMonitorCmd := mysqlMonitor()
 
@@ -28,24 +39,26 @@ func init() {
 }
 
 func Exec() {
-	if err := rootCmd.Execute(); err != nil {
-		fmt.Println(err)
+	if cmd, err := rootCmd.ExecuteC(); err != nil {
+		if cmd != nil {
+			configuration.GetLogger(configuration.GlobalLogName).Error("程序执行发生错误：", zap.String("监控项：", cmd.Name()), zap.Error(err))
+		} else {
+			configuration.GetLogger(configuration.GlobalLogName).Error("程序执行发生错误：", zap.Error(err))
+		}
+	} else {
+		configuration.GetLogger(configuration.GlobalLogName).Info("程序执行成功", zap.String("监控项", cmd.Name()))
 	}
 }
 
 func startMonitor() *cobra.Command {
 	monitorCmd := &cobra.Command{
-		Use: "start-monitor",
+		Use: configuration.WebLogName,
+		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			// web服务器监控日志
+			configuration.InitLogger(configuration.WebLogName, util.LogPath(configuration.WebLogName))
+		},
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("Starting server-monitor")
-			fmt.Println(file)
-			exePath, err := os.Executable()
-			if err != nil {
-				panic(err)
-			}
-
-			dir := filepath.Dir(exePath)
-			fmt.Println("程序自身所在目录:", dir)
+			configuration.GetLogger(configuration.WebLogName).Info("开始监控服务器", zap.String("配置文件", file))
 
 			// 开启监控
 			monitor.Start()
@@ -59,17 +72,13 @@ func startMonitor() *cobra.Command {
 
 func mysqlMonitor() *cobra.Command {
 	mysqlCmd := &cobra.Command{
-		Use: "mysql-monitor",
+		Use: configuration.MysqlLogName,
+		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			// web服务器监控日志
+			configuration.InitLogger(configuration.MysqlLogName, util.LogPath(configuration.MysqlLogName))
+		},
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("Starting mysql monitor...")
-
-			exePath, err := os.Executable()
-			if err != nil {
-				panic(err)
-			}
-
-			dir := filepath.Dir(exePath)
-			fmt.Println("程序自身所在目录:", dir)
+			configuration.GetLogger(configuration.MysqlLogName).Info("开始监控Mysql数据库", zap.String("配置文件", file))
 
 			monitor.StartMysql()
 		},
@@ -82,9 +91,5 @@ func mysqlMonitor() *cobra.Command {
 
 func validateArgs(cmd *cobra.Command) {
 	cmd.Flags().StringVarP(&file, "file", "f", ".env", "The file to run the server-monitor")
-	err := cmd.MarkFlagRequired("file")
-	if err != nil {
-		err = errors.New("缺少必要的文件名参数:" + err.Error())
-		panic(err)
-	}
+	_ = cmd.MarkFlagRequired("file")
 }

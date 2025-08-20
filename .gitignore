@@ -2,3 +2,5 @@ server-monitor*
 .env
 .DS_Store
 .idea
+*.log
+*.txt*

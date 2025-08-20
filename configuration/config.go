@@ -2,7 +2,9 @@ package configuration
 
 import (
 	"fmt"
+	"github.com/solvewer/server-monitor/util"
 	"github.com/spf13/viper"
+	"go.uber.org/zap"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/schema"
@@ -24,6 +26,8 @@ var (
 )
 
 func init() {
+	// 全局日志
+	InitLogger(GlobalLogName, util.LogPath(GlobalLogName))
 	SetConfig()
 }
 
@@ -34,7 +38,8 @@ func SetConfig() {
 	viper.SetConfigType("env")
 	err := viper.ReadInConfig()
 	if err != nil {
-		panic(fmt.Errorf("Fatal error config file: %s \n", err))
+		GetLogger(GlobalLogName).Error("viper读取配置失败", zap.Error(err))
+		panic(fmt.Errorf("viper读取配置失败: %s \n", err))
 	}
 
 	config = &Config{
@@ -57,8 +62,12 @@ func SetConfig() {
 
 	dsn := config.DbUsername + ":" + config.DbPassword + "@tcp(" + config.DbHost + ":" + strconv.Itoa(config.DbPort) + ")/" + config.DbName + "?charset=utf8mb4&parseTime=True&loc=Local"
 
-	db, err = gorm.Open(mysql.Open(dsn), &gorm.Config{NamingStrategy: schema.NamingStrategy{IdentifierMaxLength: 64, SingularTable: true}})
+	db, err = gorm.Open(mysql.Open(dsn), &gorm.Config{
+		NamingStrategy: schema.NamingStrategy{IdentifierMaxLength: 64, SingularTable: true},
+	})
+
 	if err != nil {
+		GetLogger(GlobalLogName).Error("初始化gorm发生错误", zap.Error(err))
 		panic("Gorm init error: " + err.Error())
 	}
 }

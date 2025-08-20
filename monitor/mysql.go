@@ -2,9 +2,10 @@ package monitor
 
 import (
 	"context"
-	"fmt"
 	"github.com/shirou/gopsutil/v4/disk"
+	"github.com/solvewer/server-monitor/configuration"
 	"github.com/solvewer/server-monitor/util"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 	"time"
 )
@@ -24,9 +25,12 @@ var (
 	lastQueries     int
 	lastSlowQueries int
 	prevIO          map[string]disk.IOCountersStat
+	mysqlLogger     *zap.Logger
 )
 
 func StartMysql() {
+	// mysql日志
+	mysqlLogger = configuration.GetLogger(configuration.MysqlLogName)
 	if lastQueries == 0 {
 		lastQueries, _ = GetStatus(db, "Queries")
 	}
@@ -38,22 +42,22 @@ func StartMysql() {
 
 	// Step 1: 计算距离下一个整分钟的时间
 	now := time.Now()
-	fmt.Println("程序开始执行时间：", now)
+	mysqlLogger.Info("Mysql数据库开始监控时间", zap.Time("开始监控", now))
 
 	next := now.Truncate(time.Minute).Add(time.Minute + time.Second*30)
 	time.Sleep(time.Until(next)) // 等待直到下一个30秒时刻
 
-	fmt.Println("开始统计时间：", next)
+	mysqlLogger.Info("开始统计时间", zap.Time("开始统计", time.Now()))
 	mysqlRun(next)
-	fmt.Println("统计结束时间：", time.Now())
+	mysqlLogger.Info("统计结束时间", zap.Time("结束统计", time.Now()))
 
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 
 	for now = range ticker.C {
-		fmt.Println("开始统计时间：", now)
+		mysqlLogger.Info("开始统计时间", zap.Time("开始统计", now))
 		mysqlRun(now)
-		fmt.Println("统计结束时间：", time.Now())
+		mysqlLogger.Info("统计结束时间", zap.Time("结束统计", time.Now()))
 	}
 
 }
@@ -79,8 +83,16 @@ func mysqlRun(t time.Time) {
 	ctx := context.Background()
 	err := gorm.G[MysqlMonitor](db).Table("server_monitor_mysql").Create(ctx, mysqlMonitor)
 	if err != nil {
-		fmt.Println("Gorm Insert Sql error: " + err.Error())
+		mysqlLogger.Error("新增数据失败", zap.Error(err))
 	}
+	sql := db.ToSQL(func(tx *gorm.DB) *gorm.DB {
+		return tx.Model(&MysqlMonitor{}).Create(mysqlMonitor)
+	})
+
+	mysqlLogger.Info("sql及插入的行数",
+		zap.String("sql", sql),
+		zap.Int64("rows", db.RowsAffected),
+	)
 }
 
 func mysqlCalc(t time.Time) *MysqlMonitor {

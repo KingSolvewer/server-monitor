@@ -2,7 +2,6 @@ package monitor
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"github.com/go-ping/ping"
 	"github.com/shirou/gopsutil/v4/cpu"
@@ -12,6 +11,7 @@ import (
 	"github.com/shirou/gopsutil/v4/net"
 	"github.com/solvewer/server-monitor/configuration"
 	"github.com/solvewer/server-monitor/util"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 	"sync"
 	"time"
@@ -37,11 +37,12 @@ type ServerMonitor struct {
 }
 
 var (
-	db       *gorm.DB
-	config   *configuration.Config
-	wg       sync.WaitGroup
-	lastRecv uint64
-	lastSent uint64
+	db        *gorm.DB
+	config    *configuration.Config
+	wg        sync.WaitGroup
+	lastRecv  uint64
+	lastSent  uint64
+	webLogger *zap.Logger
 )
 
 func init() {
@@ -50,7 +51,6 @@ func init() {
 }
 
 func calc(t time.Time) *ServerMonitor {
-
 	monitor := new(ServerMonitor)
 
 	wg.Add(7)
@@ -58,50 +58,54 @@ func calc(t time.Time) *ServerMonitor {
 	wg.Wait()
 
 	monitor.CreatedAt = t.Truncate(time.Minute)
-	fmt.Println("入表时间：", monitor.CreatedAt)
+	webLogger.Info("入表时间", zap.Time("时间", monitor.CreatedAt))
 	monitor.Node = config.WebNode
 	return monitor
 }
 
 func Start() {
+	webLogger = configuration.GetLogger(configuration.WebLogName)
 	// Step 1: 计算距离下一个整分钟的时间
 	now := time.Now()
-	fmt.Println("程序开始执行时间：", now)
+	webLogger.Info("服务器开始监控时间", zap.Time("开始监控", now))
+
 	next := now.Truncate(time.Minute).Add(time.Minute + time.Second*30)
 	time.Sleep(time.Until(next)) // 等待直到下一个30秒时刻
 
-	fmt.Println("开始统计时间：", time.Now())
+	webLogger.Info("开始统计时间", zap.Time("开始统计", time.Now()))
 	run(next)
-	fmt.Println("统计结束时间：", time.Now())
+	webLogger.Info("统计结束时间", zap.Time("结束统计", time.Now()))
 
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop() // 确保释放资源
 
 	for now = range ticker.C {
-		fmt.Println("统计开始时间：", now)
+		webLogger.Info("开始统计时间", zap.Time("开始统计", now))
 		run(now)
-		fmt.Println("统计结束时间：", time.Now())
+		webLogger.Info("统计结束时间", zap.Time("结束统计", time.Now()))
 	}
 }
 
 func run(t time.Time) {
-	calc(t)
-	//monitor := calc(t)
-
-	//err := monitor.save()
-	//if err != nil {
-	//	fmt.Println(err)
-	//}
+	monitor := calc(t)
+	monitor.save()
 }
 
-func (monitor *ServerMonitor) save() (err error) {
+func (monitor *ServerMonitor) save() {
 	ctx := context.Background()
-	err = gorm.G[ServerMonitor](db).Table("server_monitor").Create(ctx, monitor)
+	err := gorm.G[ServerMonitor](db).Table("server_monitor").Create(ctx, monitor)
 	if err != nil {
-		return errors.New("Gorm Insert Sql error: " + err.Error())
+		webLogger.Error("新增数据失败", zap.Error(err))
 	}
+	
+	sql := db.ToSQL(func(tx *gorm.DB) *gorm.DB {
+		return tx.Model(&ServerMonitor{}).Create(monitor)
+	})
 
-	return
+	mysqlLogger.Info("sql及插入的行数",
+		zap.String("sql", sql),
+		zap.Int64("rows", db.RowsAffected),
+	)
 }
 
 func (monitor *ServerMonitor) route() {
@@ -152,17 +156,18 @@ func (monitor *ServerMonitor) pressure() {
 	loadAvg, _ := load.Avg()
 	cpuCount, _ := cpu.Counts(true)
 	monitor.Pressure = util.ToDouble(loadAvg.Load1 / float64(cpuCount))
-	fmt.Println("系统压力", monitor.Pressure)
+	webLogger.Info("系统压力", zap.Float64("Pressure", monitor.Pressure))
 
 	// 3. 系统负载（Load1）
 	monitor.LoadAvg = util.ToDouble(loadAvg.Load1)
-	fmt.Println("系统负载", monitor.LoadAvg)
+	webLogger.Info("系统负载", zap.Float64("LoadAvg", monitor.LoadAvg))
 }
 
 func (monitor *ServerMonitor) cpu() {
 	cpuPercent, _ := cpu.Percent(time.Second, false) // 采样一秒
 	monitor.CpuUsage = util.ToDouble(cpuPercent[0])
-	fmt.Println("cpu使用率", monitor.CpuUsage)
+	webLogger.Info("cpu使用率", zap.Float64("CpuUsage", monitor.CpuUsage))
+
 }
 
 func (monitor *ServerMonitor) mem() {
@@ -170,13 +175,14 @@ func (monitor *ServerMonitor) mem() {
 	monitor.MemUsage = util.ToDouble(vmem.UsedPercent)
 	monitor.MemTotal = util.ToGbInt64(vmem.Total)
 	monitor.MemUsed = util.ToGbInt64(vmem.Used)
-	fmt.Println("内存使用情况：", vmem, monitor.MemUsage)
+	webLogger.Info("内存使用情况", zap.Float64("CpuUsage", monitor.CpuUsage))
 }
 
 func (monitor *ServerMonitor) swap() {
 	swap, _ := mem.SwapMemory()
 	monitor.SwapUsage = util.ToDouble(swap.UsedPercent)
-	fmt.Println("交换区使用情况：", swap, monitor.SwapUsage)
+	webLogger.Info("交换区使用情况", zap.Float64("SwapUsage", monitor.SwapUsage))
+
 }
 
 func (monitor *ServerMonitor) disk() {
@@ -184,11 +190,10 @@ func (monitor *ServerMonitor) disk() {
 	monitor.DiskUsage = util.ToDouble(diskUsage.UsedPercent)
 	monitor.DiskTotal = util.ToGbInt64(diskUsage.Total)
 	monitor.DiskUsed = util.ToGbInt64(diskUsage.Used)
-	fmt.Println("磁盘使用情况：", diskUsage, monitor.DiskUsage)
+	webLogger.Info("磁盘使用情况", zap.Float64("DiskUsage", monitor.DiskUsage))
 }
 
 func (monitor *ServerMonitor) byte() {
-
 	ioStats, _ := net.IOCounters(false)
 	currentRecv := ioStats[0].BytesRecv
 	currentSent := ioStats[0].BytesSent
@@ -204,12 +209,14 @@ func (monitor *ServerMonitor) byte() {
 	}
 	lastRecv = currentRecv
 	lastSent = currentSent
+	webLogger.Info("磁盘IO", zap.Float64("ReceiveSpeed", monitor.ReceiveSpeed), zap.Float64("SentSpeed", monitor.SentSpeed))
 }
 
 func (monitor *ServerMonitor) net() {
 	pinger, err := ping.NewPinger("8.8.8.8") // Google DNS
 	if err != nil {
-		fmt.Println("ping时报错：", err)
+		fmt.Println("初始化ping报错：", err)
+		webLogger.Error("初始化ping报错：", zap.Error(err))
 	}
 	pinger.Count = 5                 // 一次发送 5 个 ping
 	pinger.Interval = time.Second    // 每秒一个
@@ -219,6 +226,7 @@ func (monitor *ServerMonitor) net() {
 	// 可选：注册回调
 	pinger.OnRecv = func(pkt *ping.Packet) {
 		fmt.Printf("Reply from %s: time=%v\n", pkt.IPAddr, pkt.Rtt)
+		webLogger.Info("ping响应", zap.String("IPAddr", pkt.IPAddr.String()), zap.Int64("Rtt", int64(pkt.Rtt)))
 	}
 	pinger.OnFinish = func(stats *ping.Statistics) {
 		//spew.Dump(stats)
@@ -231,11 +239,14 @@ func (monitor *ServerMonitor) net() {
 
 		monitor.AvgRtt = util.ToDouble(float64(int(stats.AvgRtt)) / 1000000)
 		monitor.PacketLoss = util.ToDouble(stats.PacketLoss)
+		webLogger.Info("ping数据", zap.String("IPAddr", stats.Addr), zap.Float64("PacketLoss", monitor.PacketLoss), zap.Float64("AvgRtt", monitor.AvgRtt))
 	}
 
 	fmt.Println("PING 8.8.8.8:")
 	err = pinger.Run() // 阻塞执行
 	if err != nil {
-		fmt.Println("ping时报错：", err)
+		fmt.Println("ping运行时报错：", err)
+		webLogger.Error("ping运行时报错：", zap.Error(err))
+
 	}
 }
