@@ -47,8 +47,9 @@ var globalLogger *zap.Logger
 //}
 
 var (
-	loggers = make(map[string]*zap.Logger) // 按命令名存储Logger
-	mu      sync.Mutex
+	loggers           = make(map[string]*zap.Logger) // 按命令名存储Logger
+	mu                sync.Mutex
+	lumberjackLoggers = make(map[string]*lumberjack.Logger)
 )
 
 const (
@@ -74,6 +75,7 @@ func InitLogger(cmdName, logPath string) *zap.Logger {
 		MaxAge:     30,      // 日志保留30天
 		Compress:   true,    // 压缩旧日志
 	}
+	lumberjackLoggers[cmdName] = lumberjackLogger
 
 	// 2. 双输出目标（控制台+文件）
 	consoleSyncer := zapcore.AddSync(os.Stdout)
@@ -113,4 +115,8 @@ func GetLogger(cmdName string) *zap.Logger {
 func customTimeEncoder(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
 	// 格式：2006-01-02 15:04:05.00000 -0700 MST m=+0.000000001
 	enc.AppendString(t.Format("2006-01-02 15:04:05.000000 -0700 MST m=+0.000000001"))
+}
+
+func GetLumberjackLogger(cmdName string) *lumberjack.Logger {
+	return lumberjackLoggers[cmdName]
 }

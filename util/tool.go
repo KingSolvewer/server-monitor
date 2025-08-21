@@ -72,5 +72,6 @@ func AlignTicker(ctx context.Context, interval time.Duration, immediate bool) <-
 }
 
 func LogPath(fileName string) string {
-	return "/var/log/" + fileName + time.Now().Format("2006-01-02-15-04-05") + ".log"
+	return "/var/log/" + fileName + ".log"
+	//return fileName + ".log"
 }

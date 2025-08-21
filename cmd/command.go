@@ -8,7 +8,9 @@ import (
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 )
 
 var (
@@ -39,7 +41,11 @@ func init() {
 }
 
 func Exec() {
-	if cmd, err := rootCmd.ExecuteC(); err != nil {
+	var (
+		cmd *cobra.Command
+		err error
+	)
+	if cmd, err = rootCmd.ExecuteC(); err != nil {
 		if cmd != nil {
 			configuration.GetLogger(configuration.GlobalLogName).Error("程序执行发生错误：", zap.String("监控项：", cmd.Name()), zap.Error(err))
 		} else {
@@ -47,6 +53,25 @@ func Exec() {
 		}
 	} else {
 		configuration.GetLogger(configuration.GlobalLogName).Info("程序执行成功", zap.String("监控项", cmd.Name()))
+	}
+
+	signalChan := make(chan os.Signal, 1)
+	ch := make(chan struct{})
+	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
+
+	if cmd != nil {
+		go func() {
+			for range signalChan {
+				logger := configuration.GetLumberjackLogger(cmd.Name())
+				if err = logger.Rotate(); err == nil {
+					configuration.GetLogger(configuration.GlobalLogName).Info("日志备份成功", zap.String("监控项", cmd.Name()))
+				} else {
+					configuration.GetLogger(configuration.GlobalLogName).Info("日志备份失败", zap.String("监控项", cmd.Name()), zap.Error(err))
+				}
+				ch <- struct{}{}
+			}
+		}()
+		<-ch
 	}
 }
 
