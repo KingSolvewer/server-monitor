@@ -97,12 +97,12 @@ func (monitor *ServerMonitor) save() {
 	if err != nil {
 		webLogger.Error("新增数据失败", zap.Error(err))
 	}
-	
+
 	sql := db.ToSQL(func(tx *gorm.DB) *gorm.DB {
 		return tx.Model(&ServerMonitor{}).Create(monitor)
 	})
 
-	mysqlLogger.Info("sql及插入的行数",
+	webLogger.Info("sql及插入的行数",
 		zap.String("sql", sql),
 		zap.Int64("rows", db.RowsAffected),
 	)
